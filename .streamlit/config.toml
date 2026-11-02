@@ -1,0 +1,16 @@
+[client]
+showErrorDetails = false
+
+[runner]
+fastReruns = true
+
+[server]
+runOnSave = true
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base="dark"
+primaryColor="#1bb0d1"
