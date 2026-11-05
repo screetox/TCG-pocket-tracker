@@ -12,32 +12,18 @@ CURRENT_BOOSTER = 'C1'
 
 st.set_page_config(
     page_title='TCGP Tracker',
-    page_icon='🎴',
+    page_icon='🎴'
 )
 
 
 # ----------------------------------------------------------------------------------
 # CUSTOM CSS
 
-st.html('''<style>
-    [data-testid='InputInstructions'],
-    [data-testid='stInputInstructions'] {
-        display: none;
-    }
+def load_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
-    header {
-        background: transparent !important;
-    }
-
-    main > div {
-        padding-top: 0 !important;
-        padding-bottom: 5rem !important;
-    }
-
-    h1 {
-        padding-top: 0 !important;
-    }
-</style>''')
+load_css('style.css')
 
 
 # ----------------------------------------------------------------------------------
@@ -73,9 +59,109 @@ authenticator = stauth.Authenticate(
 
 
 # ----------------------------------------------------------------------------------
+# HELPER FUNCTIONS
+
+# Map 0.0 (red) to 1.0 (green)
+def color_percentage(val):
+    if pd.isna(val):
+        return ''
+
+    v = max(0.0, min(1.0, float(val)))
+
+    a = 0.1
+    if v == 0 or v == 1:
+        a = 0.2
+
+    ratio = (v - 0.5) / 0.5
+    r = int(234 + (34 - 234) * ratio)
+    g = int(179 + (197 - 179) * ratio)
+    b = int(8 + (94 - 8) * ratio)
+    if v < 0.5:
+        ratio = v / 0.5
+        r = int(239 + (234 - 239) * ratio)
+        g = int(68 + (179 - 68) * ratio)
+        b = int(68 + (8 - 68) * ratio)
+
+    return f'background-color: rgba({r}, {g}, {b}, {a});'
+
+# Render statistics table
+def render_stats_dataframe(
+    df,
+    column_order,
+    row_height=35,
+    header_height=38
+):
+    total_height = (len(df) * row_height) + header_height
+
+    styled_df = df.style.map(
+        color_percentage,
+        subset=['percentage_all', 'percentage_diamond']
+    )
+
+    return st.dataframe(
+        styled_df,
+        column_order=column_order,
+        column_config={
+            'booster_id': st.column_config.TextColumn('ID'),
+            'booster': st.column_config.TextColumn(
+                'Booster',
+                pinned=True,
+                width=190
+            ),
+            'booster_display': st.column_config.TextColumn(
+                'Booster',
+                pinned=True,
+                width=190
+            ),
+            'series': st.column_config.TextColumn('Serie'),
+            'percentage_all': st.column_config.ProgressColumn(
+                '% (Gesamt)',
+                format='percent',
+                min_value=0,
+                max_value=1,
+                step=0.001,
+                color='rgb(250, 250, 250)',
+                width=100
+            ),
+            'total_cards_all': st.column_config.NumberColumn('Gesamt'),
+            'missing_all': st.column_config.NumberColumn('Fehlend'),
+            'percentage_diamond': st.column_config.ProgressColumn(
+                '% (Gezählt)',
+                format='percent',
+                min_value=0,
+                max_value=1,
+                step=0.001,
+                color='rgb(250, 250, 250)',
+                width=100
+            ),
+            'total_cards_diamond': st.column_config.NumberColumn('Gezählt'),
+            'missing_diamond': st.column_config.NumberColumn('Fehlend'),
+            'diamond_1': st.column_config.NumberColumn('♢'),
+            'diamond_2': st.column_config.NumberColumn('♢♢'),
+            'diamond_3': st.column_config.NumberColumn('♢♢♢'),
+            'diamond_4': st.column_config.NumberColumn('♢♢♢♢'),
+            'star_1': st.column_config.NumberColumn('☆'),
+            'star_2': st.column_config.NumberColumn('☆☆'),
+            'star_3': st.column_config.NumberColumn('☆☆☆'),
+            'shiny_1': st.column_config.NumberColumn('✸'),
+            'shiny_2': st.column_config.NumberColumn('✸✸'),
+            'crown': st.column_config.NumberColumn('♛')
+        },
+        hide_index=True,
+        placeholder='-',
+        height=total_height,
+        row_height=row_height
+    )
+
+
+# ----------------------------------------------------------------------------------
 # MAIN APP
 
-st.title(':rainbow[Pokémon TCG Pocket Tracker]', icon='🎴')
+st.title(
+    ':rainbow[Pokémon TCG Pocket Tracker]',
+    icon='🎴',
+    text_alignment='center'
+)
 st.sidebar.title('Einstellungen')
 
 
@@ -95,7 +181,7 @@ try:
         }
     )
 except Exception as e:
-    st.sidebar.error(e)
+    st.sidebar.error(f'Fehler: {e}')
 
 
 # ----------------------------------------------------------------------------------
@@ -115,12 +201,16 @@ if st.session_state.get('authentication_status'):
 
     # --- NAVIGATION ---
     if user_role == 'admin':
-        tabs = st.tabs(['Tracker', 'Statistik', 'Vergleich', 'Admin'])
+        tab_tracker, tab_stats, tab_comparison, tab_admin = st.tabs(
+            ['Tracker', 'Statistik', 'Vergleich', 'Admin'],
+        )
     else:
-        tabs = st.tabs(['Tracker', 'Statistik', 'Vergleich'])
+        tab_tracker, tab_stats, tab_comparison = st.tabs(
+            ['Tracker', 'Statistik', 'Vergleich']
+        )
 
     # --- FEATURE 1: TRACK CARD COUNTS ---
-    with tabs[0]:
+    with tab_tracker:
         st.header('Karten Sammlung', icon='📝')
 
         col1, col2 = st.columns(2)
@@ -158,7 +248,7 @@ if st.session_state.get('authentication_status'):
                 'Wähle ein Booster:',
                 booster_list,
                 index=default_booster_index,
-                format_func=lambda name: f'{name} ({booster_dict.get(name, "")})' \
+                format_func=lambda name: f'{name} ({booster_dict.get(name, '')})' \
                     if name in booster_dict else name
             )
 
@@ -226,13 +316,18 @@ if st.session_state.get('authentication_status'):
 
             edited_df = st.data_editor(
                 df_rows,
-                column_order=['group', 'name', 'booster', 'notiz', 'seltenheit', 'quantity'],
+                column_order=['name', 'notiz', 'seltenheit', 'quantity'],
                 disabled=['id', 'group', 'name', 'booster', 'notiz', 'seltenheit'],
                 column_config={
-                    'group': None,
-                    'booster': None,
-                    'quantity': st.column_config.TextColumn('#', max_chars=2)
+                    'id': st.column_config.TextColumn('ID'),
+                    'group': st.column_config.NumberColumn('ID (Gruppe)'),
+                    'name': st.column_config.TextColumn('Name'),
+                    'notiz': st.column_config.TextColumn('Notiz'),
+                    'seltenheit': st.column_config.TextColumn('Seltenheit'),
+                    'quantity': st.column_config.TextColumn('#', max_chars=2),
+                    'booster': st.column_config.TextColumn('Booster')
                 },
+                placeholder='-',
                 height=total_height,
                 row_height=row_height,
                 on_change='ignore',
@@ -241,7 +336,7 @@ if st.session_state.get('authentication_status'):
 
         # Commit data to DB
         with button_container:
-            if st.button('Änderungen speichern', icon='💾', shortcut="Ctrl+S"):
+            if st.button('Änderungen speichern', icon='💾', shortcut='Ctrl+S'):
                 group_updates = {}
                 has_raw_edits = False
 
@@ -307,18 +402,12 @@ if st.session_state.get('authentication_status'):
                             st.session_state.editor_rev += 1
                             st.rerun()
                     else:
-                        if total_updates > 1:
-                            st.toast(
-                                f'{total_updates} Karten aktualisiert!',
-                                icon='✔️',
-                                duration='long'
-                            )
-                        else:
-                            st.toast(
-                                f'{total_updates} Karte aktualisiert!',
-                                icon='✔️',
-                                duration='long'
-                            )
+                        st.toast(
+                            f'''{total_updates} Karte{'n' \
+                                if total_updates > 1 else ''} aktualisiert!''',
+                            icon='✔️',
+                            duration='long'
+                        )
 
                         st.session_state.editor_rev += 1
                         st.rerun()
@@ -331,15 +420,83 @@ if st.session_state.get('authentication_status'):
                     )
 
     # --- FEATURE 2: SHOW STATISTICS ---
-    with tabs[1]:
+    with tab_stats:
         st.header('Karten Statstik', icon='📊')
-        st.warning('''
-            Dieser Bereich ist noch nicht fertiggestellt.
-            Schau später nochmal vorbei.
-        ''')
+
+        tab_general_booster, tab_sub_booster = st.tabs(
+            ['Gesamte Booster', 'Einzelne Booster']
+        )
+
+        with tab_general_booster:
+            st.info('Diese Statistik enthält *alle* Karten \
+                (auch aus Missionen und gegen Echtgeld).')
+
+            booster_stats_response = (
+                supabase.rpc('get_booster_stats', { 'p_user_id': user_id })
+                .execute()
+            )
+            stats_df = pd.DataFrame(booster_stats_response.data)
+
+            rarity_cols = [
+                'diamond_1', 'diamond_2', 'diamond_3', 'diamond_4',
+                'star_1', 'star_2', 'star_3', 'shiny_1', 'shiny_2', 'crown'
+            ]
+            stats_df[rarity_cols] = stats_df[rarity_cols].replace(0, None)
+
+            render_stats_dataframe(
+                stats_df,
+                column_order=[
+                    'booster', 'percentage_all', 'total_cards_all',
+                    'missing_all', 'percentage_diamond',
+                    'total_cards_diamond', 'missing_diamond'
+                ]
+            )
+
+            render_stats_dataframe(
+                stats_df,
+                column_order=[
+                    'booster', 'diamond_1', 'diamond_2',
+                    'diamond_3', 'diamond_4', 'star_1', 'star_2',
+                    'star_3', 'shiny_1', 'shiny_2', 'crown'
+                ]
+            )
+
+        with tab_sub_booster:
+            st.info('Diese Statistik enthält *keine* Karten \
+                aus Missionen und gegen Echtgeld.')
+
+            sub_booster_stats_ratio_response = (
+                supabase.rpc('get_sub_booster_stats', { 'p_user_id': user_id })
+                .execute()
+            )
+            sub_stats_df = pd.DataFrame(sub_booster_stats_ratio_response.data)
+
+            rarity_cols = [
+                'diamond_1', 'diamond_2', 'diamond_3', 'diamond_4',
+                'star_1', 'star_2', 'star_3', 'shiny_1', 'shiny_2', 'crown'
+            ]
+            sub_stats_df[rarity_cols] = sub_stats_df[rarity_cols].replace(0, None)
+
+            render_stats_dataframe(
+                sub_stats_df,
+                column_order=[
+                    'booster_display', 'percentage_all', 'total_cards_all',
+                    'missing_all', 'percentage_diamond','total_cards_diamond',
+                    'missing_diamond'
+                ]
+            )
+
+            render_stats_dataframe(
+                sub_stats_df,
+                column_order=[
+                    'booster_display', 'diamond_1', 'diamond_2',
+                    'diamond_3', 'diamond_4', 'star_1', 'star_2',
+                    'star_3', 'shiny_1', 'shiny_2', 'crown'
+                ]
+            )
 
     # --- FEATURE 3: COMPARE TO OTHER USERS ---
-    with tabs[2]:
+    with tab_comparison:
         st.header('Karten Vergleich', icon='👥')
         st.warning('''
             Dieser Bereich ist noch nicht fertiggestellt.
@@ -348,7 +505,7 @@ if st.session_state.get('authentication_status'):
 
     # --- ADMIN ONLY CONTENT ---
     if user_role == 'admin':
-        with tabs[3]:
+        with tab_admin:
             st.header('Admin Dashboard', icon='🛠️')
             st.warning('''
                 Dieser Bereich ist noch nicht fertiggestellt.

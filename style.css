@@ -1,0 +1,30 @@
+[data-testid='InputInstructions'] {
+    display: none;
+}
+
+header {
+    background: transparent !important;
+    pointer-events: none !important;
+}
+
+header div {
+    pointer-events: none !important;
+}
+
+header button {
+    background-color: rgb(14, 17, 23) !important;
+    pointer-events: auto !important;
+}
+
+header button:hover {
+    background-color: rgb(28, 34, 46) !important;
+}
+
+main > div {
+    padding-top: 1rem !important;
+    padding-bottom: 5rem !important;
+}
+
+h1 {
+    padding-top: 0 !important;
+}
