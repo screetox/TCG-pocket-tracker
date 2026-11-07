@@ -36,7 +36,7 @@ def init_supabase() -> sb.Client:
     return sb.create_client(url, key)
 
 supabase = init_supabase()
-users_data = supabase.table('users').select('*').execute().data or []
+users_data = supabase.table('users').select('*').order('id').execute().data or []
 user_list = [u['username'] for u in users_data]
 
 
@@ -153,6 +153,90 @@ def render_stats_dataframe(
         row_height=row_height
     )
 
+# Render booster creation dialog
+@st.dialog('Booster erstellen', icon='🗃️')
+def booster_creation_dialog(missing_booster, supabase):
+    series_resp = (
+        supabase.table('series')
+        .select('series_name')
+        .order('series_name')
+        .execute()
+    )
+    valid_series = [row['series_name'] for row in series_resp.data]
+
+    if not valid_series:
+        st.error(
+            'Es existiert keine Serie, zu der ein Booster hinzugefügt werden kann.'
+        )
+        return
+
+    booster_to_submit = {}
+
+    for booster in missing_booster:
+        create_it = st.checkbox(
+            f'*{booster}* erstellen',
+            value=True,
+            key=f'checkbox_{booster}'
+        )
+
+        left, right = st.columns([1, 2])
+
+        with left:
+            booster_id = st.text_input(
+                f'ID für *{booster}*',
+                placeholder='A1',
+                key=f'id_input_{booster}',
+                disabled=not create_it
+            )
+
+        with right:
+            selected_series = st.selectbox(
+                f'Serie für *{booster}*',
+                options=valid_series,
+                index=None,
+                placeholder='Serie auswählen...',
+                key=f'series_selection_{booster}',
+                disabled=not create_it
+            )
+
+        if create_it:
+            booster_to_submit[booster] = {
+                'id': booster_id,
+                'booster_name': booster,
+                'series': selected_series
+            }
+
+        st.html('<hr class="custom-hr" style="margin: 0">')
+
+    if st.button('Booster erstellen', icon='💾'):
+        records_to_insert = list(booster_to_submit.values())
+
+        if not records_to_insert:
+            st.warning('Keine Booster zum Erstellen ausgewählt.')
+            return
+
+        try:
+            b_resp = (
+                supabase.table('booster')
+                .upsert(records_to_insert)
+                .execute()
+            )
+
+            if b_resp.data:
+                st.toast(
+                    f'{len(b_resp.data)} Booster erfolgreich erstellt!',
+                    icon='✔️',
+                    duration='long'
+                )
+                st.rerun()
+
+        except Exception as e:
+            st.toast(
+                f'Fehler beim Speichern: {e}',
+                icon='❌',
+                duration='long'
+            )
+
 
 # ----------------------------------------------------------------------------------
 # MAIN APP
@@ -217,7 +301,13 @@ if st.session_state.get('authentication_status'):
 
         # Filter for specific series
         with col1:
-            series_data = supabase.table('series').select('*').execute().data or []
+            series_data = (
+                supabase.table('series')
+                .select('*')
+                .order('series_name')
+                .execute()
+                .data
+            ) or []
             series_list = [s['series_name'] for s in series_data]
 
             default_series_index = series_list.index(CURRENT_SERIES) \
@@ -235,6 +325,7 @@ if st.session_state.get('authentication_status'):
                 supabase.table('booster')
                 .select('*')
                 .eq('series', selected_series)
+                .order('id')
                 .execute()
                 .data or []
             )
@@ -252,10 +343,7 @@ if st.session_state.get('authentication_status'):
                     if name in booster_dict else name
             )
 
-        st.html('''
-            <hr style="height: 1px; border-radius: 1px; border: 0;
-                background: #FFF2; margin: 1rem 0;">
-        ''')
+        st.html('<hr class="custom-hr">')
 
         if 'editor_rev' not in st.session_state:
             st.session_state.editor_rev = 0
@@ -270,6 +358,7 @@ if st.session_state.get('authentication_status'):
             supabase.table('cards')
             .select('*')
             .eq('booster_name', selected_booster)
+            .order('id')
             .execute()
             .data or []
         )
@@ -296,7 +385,7 @@ if st.session_state.get('authentication_status'):
                 'booster': card.get('booster_name'),
                 'notiz': card.get('note'),
                 'seltenheit': card.get('rarity'),
-                'quantity': user_counts.get(group_id, '0')
+                'quantity': user_counts.get(group_id, None)
             })
 
         df_rows = pd.DataFrame(table_rows)
@@ -341,8 +430,11 @@ if st.session_state.get('authentication_status'):
                 has_raw_edits = False
 
                 for card_id, row in edited_df.iterrows():
-                    old_val = str(df_rows.loc[card_id, 'quantity']).strip()
-                    val = str(row['quantity']).strip()
+                    old_raw = df_rows.loc[card_id, 'quantity']
+                    old_val = str(old_raw).strip() if pd.notna(old_raw) else ''
+
+                    new_raw = row['quantity']
+                    val = str(new_raw).strip() if pd.notna(new_raw) else ''
 
                     if val != old_val:
                         has_raw_edits = True
@@ -354,11 +446,11 @@ if st.session_state.get('authentication_status'):
                         elif num in [1, 2]:
                             final_val = str(num)
                         else:
-                            final_val = '0'
+                            final_val = ''
                     elif val == '3+':
                         final_val = '3+'
                     else:
-                        final_val = '0'
+                        final_val = ''
 
                     if final_val != old_val:
                         group_id = row['group']
@@ -368,7 +460,7 @@ if st.session_state.get('authentication_status'):
                 delete_group_ids = []
 
                 for group_id, final_val in group_updates.items():
-                    if final_val != '0':
+                    if final_val != '':
                         upsert_payload.append({
                             'user_id': user_id,
                             'group_id': group_id,
@@ -507,10 +599,178 @@ if st.session_state.get('authentication_status'):
     if user_role == 'admin':
         with tab_admin:
             st.header('Admin Dashboard', icon='🛠️')
-            st.warning('''
-                Dieser Bereich ist noch nicht fertiggestellt.
-                Schau später nochmal vorbei.
-            ''')
+
+            st.subheader('Neue Karten hochladen')
+            uploaded_file = st.file_uploader(
+                '**CSV Datei auswählen**',
+                type=['csv', 'xlsx']
+            )
+
+            if uploaded_file is not None:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        file_df = pd.read_csv(uploaded_file)
+                    elif uploaded_file.name.endswith('.xlsx'):
+                        file_df = pd.read_excel(uploaded_file, engine='openpyxl')
+                    else:
+                        raise RuntimeError('Hochgeladene Datei fehlerhaft')
+
+                    file_df = file_df.where(pd.notnull(file_df), None)
+                    file_df.columns = file_df.columns.str.strip()
+
+                    required_cols = {
+                        'id', 'name', 'booster_name', 'note', 'group_id'
+                    }
+                    missing_cols = required_cols - set(file_df.columns)
+                    if missing_cols:
+                        st.error(
+                            f'''Fehlende Spalten: {', '.join(missing_cols)}'''
+                        )
+
+                        st.write('**Vorschau:**')
+                        st.dataframe(
+                            file_df,
+                            width='content',
+                            hide_index=True,
+                            placeholder='-'
+                        )
+
+                    else:
+                        rarities = {
+                            'C Pocket': '♢',
+                            'U Pocket': '♢♢',
+                            'R Pocket': '♢♢♢',
+                            'RR Pocket': '♢♢♢♢',
+                            'SA Pocket': '☆',
+                            'SSASR Pocket': '☆☆',
+                            'Immersion': '☆☆☆',
+                            'S Pocket': '✸',
+                            'SSR Pocket': '✸✸',
+                            'UR Pocket': '♛',
+                            'C Pocket parallel': '♢ parallel',
+                            'U Pocket parallel': '♢♢ parallel',
+                            'R Pocket parallel': '♢♢♢ parallel'
+                        }
+                        file_df['rarity'] = file_df['rarity'].replace(rarities)
+
+                        string_ids = file_df[
+                            file_df['group_id'].apply(lambda x: isinstance(x, str))
+                        ]['group_id'].unique().tolist()
+
+                        id_mapping = {}
+                        if string_ids:
+                            string_id_response = (
+                                supabase.table('cards')
+                                .select('id, group_id')
+                                .in_('id', string_ids)
+                                .execute()
+                            )
+
+                            for record in string_id_response.data:
+                                id_mapping[record['id']] = record['group_id']
+
+                        max_group_response = (
+                            supabase.table('cards')
+                            .select('group_id')
+                            .order('group_id', desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+
+                        if not max_group_response.data \
+                        or max_group_response.data[0]['group_id'] is None:
+                            raise RuntimeError('Datenbank Rückgabe fehlerhaft.')
+
+                        new_group_id = max_group_response.data[0]['group_id'] + 1
+                        new_group_ids = []
+
+                        for val in file_df['group_id']:
+                            if pd.isna(val):
+                                new_group_ids.append(new_group_id)
+                                new_group_id += 1
+                            elif isinstance(val, str):
+                                copy_group_id = id_mapping.get(val, None)
+                                if copy_group_id:
+                                    new_group_ids.append(copy_group_id)
+                                else:
+                                    new_group_ids.append(new_group_id)
+                                    new_group_id += 1
+                            else:
+                                new_group_ids.append(val)
+                        file_df['group_id'] = new_group_ids
+
+                        st.write('**Vorschau:**')
+                        st.dataframe(
+                            file_df,
+                            column_order=[
+                                'id', 'name', 'booster_name', 'note', 'group_id'
+                            ],
+                            column_config={
+                                'id': st.column_config.TextColumn('ID'),
+                                'name': st.column_config.TextColumn('Name'),
+                                'note': st.column_config.TextColumn('Notiz'),
+                                'group_id': st.column_config.NumberColumn('Gruppe'),
+                                'booster_name': st.column_config.TextColumn(
+                                    'Booster'
+                                )
+                            },
+                            width='content',
+                            hide_index=True,
+                            placeholder='-'
+                        )
+
+                        booster_resp = (
+                            supabase.table('booster')
+                            .select('booster_name')
+                            .execute()
+                        )
+
+                        valid_booster = {
+                            row['booster_name'] for row in booster_resp.data
+                        }
+                        csv_booster = set(file_df['booster_name'].dropna().unique())
+                        missing_booster = list(csv_booster - valid_booster)
+
+                        if missing_booster:
+                            if len(missing_booster) > 1:
+                                st.warning(
+                                    f'Es wurden {len(missing_booster)} Booster \
+                                        gefunden, die noch nicht existieren.'
+                                )
+                            else:
+                                st.warning(
+                                    f'Es wurde {len(missing_booster)} Booster \
+                                        gefunden, der noch nicht existiert.'
+                                )
+
+                            if st.button('Booster neu erstellen', icon='🗃️'):
+                                booster_creation_dialog(missing_booster, supabase)
+
+                        elif st.button('Karten hinzufügen', icon='🗂️'):
+                            file_df = file_df.astype(object) \
+                                .where(pd.notnull(file_df), None)
+                            records = file_df.to_dict(orient='records')
+
+                            card_upload_response = (
+                                supabase.table('cards')
+                                .upsert(records)
+                                .execute()
+                            )
+
+                            if card_upload_response.data:
+                                st.success(
+                                    f'{len(card_upload_response.data)} Karten \
+                                        erfolgreich hinzugefügt/aktualisiert!'
+                                )
+
+                            else:
+                                raise RuntimeError('Hinzufügen fehlgeschlagen')
+
+                except Exception as e:
+                    st.error(
+                        f'Fehler: {e}',
+                        icon='❌'
+                    )
 
 
 # ----------------------------------------------------------------------------------

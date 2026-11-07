@@ -28,3 +28,11 @@ main > div {
 h1 {
     padding-top: 0 !important;
 }
+
+hr.custom-hr {
+    height: 1px;
+    border-radius: 1px;
+    border: 0;
+    background: #FFF2;
+    margin: 1rem 0;
+}
