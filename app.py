@@ -133,6 +133,175 @@ authenticator = stauth.Authenticate(
 # ----------------------------------------------------------------------------------
 # HELPER FUNCTIONS
 
+def render_collection_editor(cards_data, view_key, user_id):
+    if not cards_data:
+        st.info('Keine Karten gefunden.')
+        return
+
+    rev_key = f'editor_rev_{view_key}'
+    if rev_key not in st.session_state:
+        st.session_state[rev_key] = 0
+
+    collection_data = get_collection_data(user_id)
+    user_counts = {
+        item['group_id']: item['quantity'] for item in collection_data
+    }
+
+    table_rows = []
+    for card in cards_data:
+        group_id = card.get('group_id')
+        table_rows.append({
+            'id': card.get('id'),
+            'group': group_id,
+            'name': card.get('name'),
+            'booster': card.get('booster_name'),
+            'notiz': card.get('note'),
+            'seltenheit': card.get('rarity'),
+            'quantity': user_counts.get(group_id, None)
+        })
+
+    df_rows = pd.DataFrame(table_rows)
+    if not df_rows.empty:
+        df_rows = df_rows.set_index('id')
+
+    editor_key = f'editor_{view_key}_{st.session_state[rev_key]}'
+
+    with st.form(key=f'form_{editor_key}'):
+        submit_edits = st.form_submit_button(
+            'Änderungen speichern', icon='💾', shortcut='Ctrl+S'
+        )
+
+        row_height = 35
+        header_height = 38
+        total_height = (len(df_rows) * row_height) + header_height
+
+        st.data_editor(
+            df_rows,
+            column_order=['name', 'booster', 'notiz', 'seltenheit', 'quantity'],
+            disabled=['id', 'group', 'name', 'booster', 'notiz', 'seltenheit'],
+            column_config={
+                'id': st.column_config.TextColumn('ID'),
+                'group': st.column_config.NumberColumn('ID (Gruppe)'),
+                'name': st.column_config.TextColumn('Name'),
+                'notiz': st.column_config.TextColumn('Notiz'),
+                'seltenheit': st.column_config.TextColumn('Seltenheit'),
+                'quantity': st.column_config.TextColumn('#', max_chars=2),
+                'booster': st.column_config.TextColumn('Booster')
+            },
+            placeholder='-',
+            height=total_height,
+            row_height=row_height,
+            on_change='ignore',
+            key=editor_key
+        )
+
+        if submit_edits:
+            changes = st.session_state[editor_key].get('edited_rows', {})
+
+            if not changes:
+                st.toast(
+                    'Keine Änderungen zum Speichern vorhanden.',
+                    icon='⚠️',
+                    duration='long'
+                )
+                st.rerun()
+
+            upsert_payload = []
+            delete_group_ids = []
+            actual_updates = 0
+
+            for row_idx, edit in changes.items():
+                if 'quantity' in edit:
+                    new_raw = edit['quantity']
+                    val = str(new_raw).strip() if pd.notna(new_raw) else ''
+
+                    card_id = df_rows.index[row_idx]
+                    group_id = int(df_rows.loc[card_id, 'group'])
+
+                    old_raw = df_rows.loc[card_id, 'quantity']
+                    old_val = str(old_raw).strip() if pd.notna(old_raw) else ''
+
+                    if val.isdigit():
+                        num = int(val)
+                        if num >= 3:
+                            final_val = '3+'
+                        elif num in [1, 2]:
+                            final_val = str(num)
+                        else:
+                            final_val = ''
+                    elif val == '3+':
+                        final_val = '3+'
+                    else:
+                        final_val = ''
+
+                    if final_val != old_val:
+                        actual_updates += 1
+                        if final_val != '':
+                            upsert_payload.append({
+                                'user_id': user_id,
+                                'group_id': group_id,
+                                'quantity': final_val
+                            })
+                        else:
+                            delete_group_ids.append(group_id)
+
+            if actual_updates == 0:
+                st.toast(
+                    'Keine Änderungen zum Speichern vorhanden.',
+                    icon='⚠️',
+                    duration='long'
+                )
+                st.session_state[rev_key] += 1
+                st.rerun()
+
+            try:
+                if upsert_payload:
+                    supabase.table('collection').upsert(
+                        upsert_payload,
+                        on_conflict='user_id,group_id'
+                    ).execute()
+
+                if delete_group_ids:
+                    supabase.table('collection') \
+                        .delete() \
+                        .eq('user_id', user_id) \
+                        .in_('group_id', delete_group_ids) \
+                        .execute()
+
+                get_collection_data.clear()
+                get_booster_stats_data.clear()
+                get_sub_booster_stats_data.clear()
+
+                st.toast(
+                    f'{actual_updates} Karte(n) aktualisiert!',
+                    icon='✔️',
+                    duration='long'
+                )
+
+                st.session_state[rev_key] += 1
+                st.rerun()
+
+            except Exception as e:
+                st.toast(
+                    f'Fehler beim Speichern: {e}',
+                    icon='❌',
+                    duration='long'
+                )
+
+def search_cards_data(query):
+    matched_cards = []
+    all_boosters = get_booster_data()
+
+    for b in all_boosters:
+        booster_cards = get_cards_data(b['booster_name'])
+
+        for card in booster_cards:
+            if query.lower() in str(card.get('name', '')).lower():
+                matched_cards.append(card)
+
+    matched_cards.sort(key=lambda x: x.get('id', ''))
+    return matched_cards
+
 def color_percentage(val):
     if pd.isna(val):
         return ''
@@ -218,7 +387,7 @@ def render_stats_dataframe(df, column_order, row_height=35, header_height=38):
         row_height=row_height
     )
 
-@st.dialog('Passwort ändern', icon='🔒')
+@st.dialog('Passwort ändern', icon='🔑')
 def change_password(user_name):
     try:
         auth_username = user_name.lower()
@@ -373,191 +542,69 @@ if st.session_state.get('authentication_status'):
     with tab_tracker:
         st.header('Karten Sammlung', icon='📝')
 
-        col1, col2 = st.columns(2)
+        tab_booster, tab_search = st.tabs(['Booster', 'Suche'])
 
-        with col1:
-            series_data = get_series_data()
-            series_list = [s['series_name'] for s in series_data]
+        with tab_booster:
+            col1, col2 = st.columns(2)
 
-            default_series_index = series_list.index(CURRENT_SERIES) \
-                if CURRENT_SERIES in series_list else 0
+            with col1:
+                series_data = get_series_data()
+                series_list = [s['series_name'] for s in series_data]
 
-            selected_series = st.selectbox(
-                'Wähle eine Serie:',
-                series_list,
-                index=default_series_index
+                default_series_index = series_list.index(CURRENT_SERIES) \
+                    if CURRENT_SERIES in series_list else 0
+
+                selected_series = st.selectbox(
+                    'Wähle eine Serie:',
+                    series_list,
+                    index=default_series_index
+                )
+
+            with col2:
+                booster_data = get_booster_data(selected_series)
+                booster_list = [p['booster_name'] for p in booster_data]
+                booster_dict = {p['booster_name']: p['id'] for p in booster_data}
+
+                default_booster_index = booster_list.index(CURRENT_BOOSTER) \
+                    if CURRENT_BOOSTER in booster_list else 0
+
+                selected_booster = st.selectbox(
+                    'Wähle ein Booster:',
+                    booster_list,
+                    index=default_booster_index,
+                    format_func=lambda name: (
+                        f'{name} ({booster_dict.get(name, "")})' \
+                            if name in booster_dict else name
+                    )
+                )
+
+            cards_data_booster = get_cards_data(selected_booster)
+            render_collection_editor(
+                cards_data_booster,
+                f'booster_{selected_booster}',
+                user_id
             )
 
-        with col2:
-            booster_data = get_booster_data(selected_series)
-            booster_list = [p['booster_name'] for p in booster_data]
-            booster_dict = {p['booster_name']: p['id'] for p in booster_data}
-
-            default_booster_index = booster_list.index(CURRENT_BOOSTER) \
-                if CURRENT_BOOSTER in booster_list else 0
-
-            selected_booster = st.selectbox(
-                'Wähle ein Booster:',
-                booster_list,
-                index=default_booster_index,
-                format_func=lambda name: f'{name} ({booster_dict.get(name, "")})' \
-                    if name in booster_dict else name
+        with tab_search:
+            search_query = st.text_input(
+                'Suche nach einer Karte:',
+                placeholder='Kartenname eingeben...',
+                label_visibility='collapsed',
+                live=True,
+                icon='🔍'
             )
 
-        if 'editor_rev' not in st.session_state:
-            st.session_state.editor_rev = 0
+            if search_query.strip() and len(search_query.strip()) >= 3:
+                cards_data_search = search_cards_data(search_query.strip())
 
-        if 'current_booster' not in st.session_state \
-        or st.session_state.current_booster != selected_booster:
-            st.session_state.current_booster = selected_booster
-            st.session_state.editor_rev = 0
-
-        cards_data = get_cards_data(selected_booster)
-        collection_data = get_collection_data(user_id)
-        user_counts = {
-            item['group_id']: item['quantity'] for item in collection_data
-        }
-
-        table_rows = []
-        for card in cards_data:
-            group_id = card.get('group_id')
-            table_rows.append({
-                'id': card.get('id'),
-                'group': group_id,
-                'name': card.get('name'),
-                'booster': card.get('booster_name'),
-                'notiz': card.get('note'),
-                'seltenheit': card.get('rarity'),
-                'quantity': user_counts.get(group_id, None)
-            })
-
-        df_rows = pd.DataFrame(table_rows)
-        if not df_rows.empty:
-            df_rows = df_rows.set_index('id')
-
-        editor_key = f'editor_{selected_booster}_{st.session_state.editor_rev}'
-
-        with st.form(key=f'form_{editor_key}'):
-            submit_edits = st.form_submit_button(
-                'Änderungen speichern', icon='💾', shortcut='Ctrl+S'
-            )
-
-            row_height = 35
-            header_height = 38
-            total_height = (len(df_rows) * row_height) + header_height
-
-            st.data_editor(
-                df_rows,
-                column_order=['name', 'notiz', 'seltenheit', 'quantity'],
-                disabled=['id', 'group', 'name', 'booster', 'notiz', 'seltenheit'],
-                column_config={
-                    'id': st.column_config.TextColumn('ID'),
-                    'group': st.column_config.NumberColumn('ID (Gruppe)'),
-                    'name': st.column_config.TextColumn('Name'),
-                    'notiz': st.column_config.TextColumn('Notiz'),
-                    'seltenheit': st.column_config.TextColumn('Seltenheit'),
-                    'quantity': st.column_config.TextColumn('#', max_chars=2),
-                    'booster': st.column_config.TextColumn('Booster')
-                },
-                placeholder='-',
-                height=total_height,
-                row_height=row_height,
-                on_change='ignore',
-                key=editor_key
-            )
-
-            if submit_edits:
-                changes = st.session_state[editor_key].get('edited_rows', {})
-
-                if not changes:
-                    st.toast(
-                        'Keine Änderungen zum Speichern vorhanden.',
-                        icon='⚠️',
-                        duration='long'
-                    )
-                    st.rerun()
-
-                upsert_payload = []
-                delete_group_ids = []
-                actual_updates = 0
-
-                for row_idx, edit in changes.items():
-                    if 'quantity' in edit:
-                        new_raw = edit['quantity']
-                        val = str(new_raw).strip() if pd.notna(new_raw) else ''
-
-                        card_id = df_rows.index[row_idx]
-                        group_id = int(df_rows.loc[card_id, 'group'])
-
-                        old_raw = df_rows.loc[card_id, 'quantity']
-                        old_val = str(old_raw).strip() if pd.notna(old_raw) else ''
-
-                        if val.isdigit():
-                            num = int(val)
-                            if num >= 3:
-                                final_val = '3+'
-                            elif num in [1, 2]:
-                                final_val = str(num)
-                            else:
-                                final_val = ''
-                        elif val == '3+':
-                            final_val = '3+'
-                        else:
-                            final_val = ''
-
-                        if final_val != old_val:
-                            actual_updates += 1
-                            if final_val != '':
-                                upsert_payload.append({
-                                    'user_id': user_id,
-                                    'group_id': group_id,
-                                    'quantity': final_val
-                                })
-                            else:
-                                delete_group_ids.append(group_id)
-
-                if actual_updates == 0:
-                    st.toast(
-                        'Keine Änderungen zum Speichern vorhanden.',
-                        icon='⚠️',
-                        duration='long'
-                    )
-                    st.session_state.editor_rev += 1
-                    st.rerun()
-
-                try:
-                    if upsert_payload:
-                        supabase.table('collection').upsert(
-                            upsert_payload,
-                            on_conflict='user_id,group_id'
-                        ).execute()
-
-                    if delete_group_ids:
-                        supabase.table('collection') \
-                            .delete() \
-                            .eq('user_id', user_id) \
-                            .in_('group_id', delete_group_ids) \
-                            .execute()
-
-                    get_collection_data.clear()
-                    get_booster_stats_data.clear()
-                    get_sub_booster_stats_data.clear()
-
-                    st.toast(
-                        f'{actual_updates} Karte(n) aktualisiert!',
-                        icon='✔️',
-                        duration='long'
-                    )
-
-                    st.session_state.editor_rev += 1
-                    st.rerun()
-
-                except Exception as e:
-                    st.toast(
-                        f'Fehler beim Speichern: {e}',
-                        icon='❌',
-                        duration='long'
-                    )
+                render_collection_editor(
+                    cards_data_search,
+                    f'search_{search_query.strip()}',
+                    user_id
+                )
+            else:
+                st.caption('Gib mindestens 3 Zeichen (ohne Leerzeichen) ein, \
+                    um die Suche zu starten.')
 
     # --- FEATURE 2: SHOW STATISTICS ---
     with tab_stats:
@@ -573,7 +620,7 @@ if st.session_state.get('authentication_status'):
         ]
 
         with tab_general_booster:
-            st.info('Diese Statistik enthält *alle* Karten \
+            st.caption('Diese Statistik enthält *alle* Karten \
                 (auch aus Missionen und gegen Echtgeld).')
 
             stats_data = get_booster_stats_data(user_id)
@@ -596,7 +643,7 @@ if st.session_state.get('authentication_status'):
             )
 
         with tab_sub_booster:
-            st.info('Diese Statistik enthält *keine* Karten \
+            st.caption('Diese Statistik enthält *keine* Karten \
                 aus Missionen und gegen Echtgeld.')
 
             sub_stats_data = get_sub_booster_stats_data(user_id)
@@ -609,7 +656,7 @@ if st.session_state.get('authentication_status'):
                 sub_stats_df,
                 column_order=[
                     'booster_display', 'percentage_all', 'total_cards_all',
-                    'missing_all', 'percentage_diamond','total_cards_diamond',
+                    'missing_all', 'percentage_diamond', 'total_cards_diamond',
                     'missing_diamond'
                 ]
             )
@@ -772,7 +819,7 @@ if st.session_state.get('authentication_status'):
 
                         st.info(
                             f'Vom Standard abweichende Seltenheiten gefunden: \
-                                {', '.join(unmapped_rarities)}'
+                                {", ".join(unmapped_rarities)}'
                         )
 
                         all_booster = get_booster_data()
