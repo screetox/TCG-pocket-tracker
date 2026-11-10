@@ -656,8 +656,12 @@ if st.session_state.get('authentication_status'):
     with tab_stats:
         st.header('Karten Statistik', icon='📊')
 
-        stats_tab_general_booster, stats_tab_sub_booster = st.tabs(
-            ['Gesamte Booster', 'Einzelne Booster']
+        (
+            stats_tab_general_booster,
+            stats_tab_sub_booster,
+            stats_tab_missing_cards
+        ) = st.tabs(
+            ['Gesamte Booster', 'Einzelne Booster', 'Fehlende Karten']
         )
 
         rarity_cols = [
@@ -711,6 +715,173 @@ if st.session_state.get('authentication_status'):
                 sub_stats_df,
                 column_order=['booster_display'] + rarity_cols
             )
+
+        with stats_tab_missing_cards:
+            with st.expander(
+                'Filter & Einstellungen',
+                icon='⚙️',
+                expanded=True,
+                key='missing_filter_expander'
+            ):
+                filter_mode = st.radio(
+                    'Filtern nach:',
+                    ['Booster', 'Seltenheit'],
+                    horizontal=True,
+                    key='missing_filter_mode'
+                )
+
+                if filter_mode == 'Booster':
+                    missing_left, missing_right = st.columns(2)
+                    with missing_left:
+                        missing_series_data = get_series_data()
+                        missing_series_list = [
+                            s['series_name'] for s in missing_series_data
+                        ]
+                        missing_default_series_index = \
+                            missing_series_list.index(CURRENT_SERIES) \
+                            if CURRENT_SERIES in series_list else 0
+
+                        missing_selected_series = st.selectbox(
+                            'Wähle eine Serie:',
+                            missing_series_list,
+                            index=missing_default_series_index,
+                            key='missing_series_select'
+                        )
+
+                    with missing_right:
+                        missing_booster_data = get_booster_data(
+                            missing_selected_series
+                        )
+                        missing_booster_list = [
+                            b['booster_name'] for b in missing_booster_data
+                        ]
+                        missing_booster_dict = {
+                            b['booster_name']: b['id'] for b in missing_booster_data
+                        }
+                        missing_default_booster_index = \
+                            missing_booster_list.index(CURRENT_BOOSTER) \
+                            if CURRENT_BOOSTER in missing_booster_list else 0
+
+                        missing_selected_booster = st.selectbox(
+                            'Wähle ein Booster:',
+                            missing_booster_list,
+                            index=missing_default_booster_index,
+                            key='missing_booster_select',
+                            format_func=lambda name: (
+                                f'{name} ({missing_booster_dict.get(name, "")})'
+                                if name in missing_booster_dict else name
+                            )
+                        )
+
+                    missing_cards_data = get_cards_data(missing_selected_booster)
+
+                elif filter_mode == 'Seltenheit':
+                    all_cards = get_all_cards()
+                    available_rarities = sorted(list({
+                        get_base_rarity(c.get('rarity'))
+                        for c in all_cards if c.get('rarity')
+                    }))
+
+                    MANUAL_ORDER = [
+                        '♢', '♢♢', '♢♢♢', '♢♢♢♢',
+                        '☆', '☆☆', '☆☆☆',
+                        '✸', '✸✸', '♛'
+                    ]
+                    available_rarities.sort(
+                        key=(
+                            lambda x: MANUAL_ORDER.index(x)
+                            if x in MANUAL_ORDER else 999
+                        )
+                    )
+
+                    selected_rarity = st.selectbox(
+                        'Wähle eine Seltenheit:',
+                        available_rarities,
+                        index=0,
+                        key='missing_rarity_select'
+                    )
+
+                    missing_cards_data = [
+                        c for c in all_cards
+                        if c.get('rarity')
+                        and get_base_rarity(c.get('rarity')) == selected_rarity
+                    ]
+
+            if missing_cards_data:
+                my_collection = get_collection_data(user_id)
+
+                my_counts = {
+                    item['group_id']: item.get('quantity')
+                    for item in my_collection
+                }
+
+                other_users = [u for u in users_data if u['id'] != user_id]
+                other_counts = {
+                    u['username']: {
+                        item['group_id']: str(item.get('quantity'))
+                        for item in get_collection_data(u['id'])
+                    }
+                    for u in other_users
+                }
+
+                missing_rows = []
+                for card in missing_cards_data:
+                    group_id = card.get('group_id')
+                    i_have = group_id in my_counts
+
+                    if i_have:
+                        continue
+
+                    available_from = [
+                        uname for uname, counts in other_counts.items()
+                        if counts.get(group_id) in ['2', '3+']
+                    ]
+                    available_from_str = ', '.join(available_from) \
+                        if available_from else None
+
+                    missing_rows.append({
+                        'id': card.get('id'),
+                        'name': card.get('name'),
+                        'booster': card.get('booster_name'),
+                        'rarity': card.get('rarity'),
+                        'available_from': available_from_str
+                    })
+
+                if not missing_rows:
+                    st.info(
+                        'Keine Karten gefunden, die den Kriterien entsprechen.'
+                    )
+                else:
+                    df_comp = pd.DataFrame(missing_rows)
+                    df_comp = df_comp.set_index('id')
+
+                    row_height = 35
+                    header_height = 38
+                    total_height = (
+                        (len(df_comp) * row_height) + header_height
+                        if len(df_comp) < 900 else 'auto'
+                    )
+
+                    st.dataframe(
+                        df_comp,
+                        column_order=[
+                            'id', 'name', 'booster', 'rarity', 'available_from'
+                        ],
+                        column_config={
+                            'id': st.column_config.TextColumn('ID'),
+                            'name': st.column_config.TextColumn('Name'),
+                            'booster': st.column_config.TextColumn('Booster'),
+                            'rarity': st.column_config.TextColumn(
+                                'Seltenheit'
+                            ),
+                            'available_from': st.column_config.TextColumn(
+                                'Hat Karte mehrfach'
+                            )
+                        },
+                        placeholder='-',
+                        height=total_height,
+                        row_height=row_height
+                    )
 
     # --- FEATURE 3: COMPARE TO OTHER USERS ---
     with tab_comparison:
