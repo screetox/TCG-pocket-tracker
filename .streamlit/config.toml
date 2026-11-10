@@ -14,3 +14,5 @@ gatherUsageStats = false
 [theme]
 base="dark"
 primaryColor="#1bb0d1"
+backgroundColor="#0e1117"
+secondaryBackgroundColor="#262730"
