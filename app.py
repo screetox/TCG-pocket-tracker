@@ -71,6 +71,33 @@ def get_booster_data(series_name=None):
     return query.execute().data or []
 
 @st.cache_data(show_spinner=False)
+def get_all_cards():
+    all_data = []
+    start = 0
+    step = 1000
+
+    while True:
+        data = (
+            supabase.table('cards')
+            .select('*')
+            .order('id')
+            .range(start, start + step - 1)
+            .execute().data or []
+        )
+
+        if not data:
+            break
+
+        all_data.extend(data)
+
+        if len(data) < step:
+            break
+
+        start += step
+
+    return all_data
+
+@st.cache_data(show_spinner=False)
 def get_cards_data(booster_name):
     return (
         supabase.table('cards')
@@ -168,12 +195,18 @@ def render_collection_editor(cards_data, view_key, user_id):
 
     with st.form(key=f'form_{editor_key}'):
         submit_edits = st.form_submit_button(
-            'Änderungen speichern', icon='💾', shortcut='Ctrl+S'
+            'Änderungen speichern',
+            icon='💾',
+            shortcut='Ctrl+S',
+            key=f'submit_form_{editor_key}'
         )
 
         row_height = 35
         header_height = 38
-        total_height = (len(df_rows) * row_height) + header_height
+        total_height = (
+            (len(df_rows) * row_height) + header_height
+            if len(df_rows) < 900 else 'auto'
+        )
 
         st.data_editor(
             df_rows,
@@ -290,14 +323,11 @@ def render_collection_editor(cards_data, view_key, user_id):
 
 def search_cards_data(query):
     matched_cards = []
-    all_boosters = get_booster_data()
+    all_cards = get_all_cards()
 
-    for b in all_boosters:
-        booster_cards = get_cards_data(b['booster_name'])
-
-        for card in booster_cards:
-            if query.lower() in str(card.get('name', '')).lower():
-                matched_cards.append(card)
+    for card in all_cards:
+        if query.lower() in str(card.get('name', '')).lower():
+            matched_cards.append(card)
 
     matched_cards.sort(key=lambda x: x.get('id', ''))
     return matched_cards
@@ -325,7 +355,10 @@ def color_percentage(val):
     return f'background-color: rgba({r}, {g}, {b}, {a});'
 
 def render_stats_dataframe(df, column_order, row_height=35, header_height=38):
-    total_height = (len(df) * row_height) + header_height
+    total_height = (
+        (len(df) * row_height) + header_height
+        if len(df) < 900 else 'auto'
+    )
 
     styled_df = df.style.map(
         color_percentage,
@@ -387,6 +420,11 @@ def render_stats_dataframe(df, column_order, row_height=35, header_height=38):
         row_height=row_height
     )
 
+def get_base_rarity(rarity_str):
+    if not rarity_str:
+        return None
+    return rarity_str.replace(' parallel', '')
+
 @st.dialog('Passwort ändern', icon='🔑')
 def change_password(user_name):
     try:
@@ -416,7 +454,7 @@ def change_password(user_name):
         st.error(f'Fehler: {e}')
 
 @st.dialog('Booster erstellen', icon='🗃️')
-def booster_creation_dialog(missing_booster, supabase):
+def booster_creation_dialog(missing_booster):
     series_data = get_series_data()
     valid_series = [row['series_name'] for row in series_data]
 
@@ -435,9 +473,9 @@ def booster_creation_dialog(missing_booster, supabase):
             key=f'checkbox_{booster}'
         )
 
-        left, right = st.columns([1, 2])
+        booster_creation_left, booster_creation_right = st.columns([1, 2])
 
-        with left:
+        with booster_creation_left:
             booster_id = st.text_input(
                 f'ID für *{booster}*',
                 placeholder='A1',
@@ -445,7 +483,7 @@ def booster_creation_dialog(missing_booster, supabase):
                 disabled=not create_it
             )
 
-        with right:
+        with booster_creation_right:
             selected_series = st.selectbox(
                 f'Serie für *{booster}*',
                 options=valid_series,
@@ -464,7 +502,7 @@ def booster_creation_dialog(missing_booster, supabase):
 
         st.divider()
 
-    if st.button('Booster erstellen', icon='💾'):
+    if st.button('Booster erstellen', icon='💾', key='create_booster_button'):
         records_to_insert = list(booster_to_submit.values())
         if not records_to_insert:
             st.warning('Keine Booster zum Erstellen ausgewählt.')
@@ -525,29 +563,34 @@ if st.session_state.get('authentication_status'):
     if user_role == 'admin':
         st.sidebar.caption('🛠️ Admin-Modus aktiv')
     authenticator.logout('Logout', location='sidebar', use_container_width=True)
-    if st.sidebar.button('Passwort ändern', width='stretch'):
+    if st.sidebar.button(
+        'Passwort ändern',
+        width='stretch',
+        key='change_password_button'
+    ):
         change_password(user_name)
 
     # --- NAVIGATION ---
     if user_role == 'admin':
-        tab_tracker, tab_stats, tab_comparison, tab_admin = st.tabs(
-            ['Tracker', 'Statistik', 'Vergleich', 'Admin'],
+        tab_collection, tab_stats, tab_comparison, tab_admin = st.tabs(
+            ['Sammlung', 'Statistik', 'Vergleich', 'Admin'],
         )
     else:
-        tab_tracker, tab_stats, tab_comparison = st.tabs(
-            ['Tracker', 'Statistik', 'Vergleich']
+        tab_collection, tab_stats, tab_comparison = st.tabs(
+            ['Sammlung', 'Statistik', 'Vergleich']
         )
 
     # --- FEATURE 1: TRACK CARD COUNTS ---
-    with tab_tracker:
+    with tab_collection:
         st.header('Karten Sammlung', icon='📝')
 
-        tab_booster, tab_search = st.tabs(['Booster', 'Suche'])
+        collection_tab_booster, collection_tab_search = \
+            st.tabs(['Booster', 'Suche'])
 
-        with tab_booster:
-            col1, col2 = st.columns(2)
+        with collection_tab_booster:
+            collection_booster_left, collection_booster_right = st.columns(2)
 
-            with col1:
+            with collection_booster_left:
                 series_data = get_series_data()
                 series_list = [s['series_name'] for s in series_data]
 
@@ -557,10 +600,11 @@ if st.session_state.get('authentication_status'):
                 selected_series = st.selectbox(
                     'Wähle eine Serie:',
                     series_list,
-                    index=default_series_index
+                    index=default_series_index,
+                    key='collection_series_select'
                 )
 
-            with col2:
+            with collection_booster_right:
                 booster_data = get_booster_data(selected_series)
                 booster_list = [p['booster_name'] for p in booster_data]
                 booster_dict = {p['booster_name']: p['id'] for p in booster_data}
@@ -572,9 +616,10 @@ if st.session_state.get('authentication_status'):
                     'Wähle ein Booster:',
                     booster_list,
                     index=default_booster_index,
+                    key='collection_booster_select',
                     format_func=lambda name: (
-                        f'{name} ({booster_dict.get(name, "")})' \
-                            if name in booster_dict else name
+                        f'{name} ({booster_dict.get(name, "")})'
+                        if name in booster_dict else name
                     )
                 )
 
@@ -585,13 +630,14 @@ if st.session_state.get('authentication_status'):
                 user_id
             )
 
-        with tab_search:
+        with collection_tab_search:
             search_query = st.text_input(
                 'Suche nach einer Karte:',
                 placeholder='Kartenname eingeben...',
                 label_visibility='collapsed',
                 live=True,
-                icon='🔍'
+                icon='🔍',
+                key='search_input'
             )
 
             if search_query.strip() and len(search_query.strip()) >= 3:
@@ -610,7 +656,7 @@ if st.session_state.get('authentication_status'):
     with tab_stats:
         st.header('Karten Statistik', icon='📊')
 
-        tab_general_booster, tab_sub_booster = st.tabs(
+        stats_tab_general_booster, stats_tab_sub_booster = st.tabs(
             ['Gesamte Booster', 'Einzelne Booster']
         )
 
@@ -619,7 +665,7 @@ if st.session_state.get('authentication_status'):
             'star_1', 'star_2', 'star_3', 'shiny_1', 'shiny_2', 'crown'
         ]
 
-        with tab_general_booster:
+        with stats_tab_general_booster:
             st.caption('Diese Statistik enthält *alle* Karten \
                 (auch aus Missionen und gegen Echtgeld).')
 
@@ -642,7 +688,7 @@ if st.session_state.get('authentication_status'):
                 column_order=['booster'] + rarity_cols
             )
 
-        with tab_sub_booster:
+        with stats_tab_sub_booster:
             st.caption('Diese Statistik enthält *keine* Karten \
                 aus Missionen und gegen Echtgeld.')
 
@@ -669,10 +715,205 @@ if st.session_state.get('authentication_status'):
     # --- FEATURE 3: COMPARE TO OTHER USERS ---
     with tab_comparison:
         st.header('Karten Vergleich', icon='👥')
-        st.warning('''
-            Dieser Bereich ist noch nicht fertiggestellt.
-            Schau später nochmal vorbei.
-        ''')
+
+        with st.expander(
+            'Filter & Einstellungen',
+            icon='⚙️',
+            expanded=True,
+            key='comp_filter_expander'
+        ):
+            compare_user_left, compare_user_right = st.columns([2, 1])
+
+            with compare_user_left:
+                compare_user = st.selectbox(
+                    'Sammlung vergleichen mit:',
+                    [u for u in user_list if u != user_name],
+                    key='comp_user_select'
+                )
+
+            with compare_user_right:
+                filter_mode = st.radio(
+                    'Filtern nach:',
+                    ['Booster', 'Seltenheit'],
+                    horizontal=True,
+                    key='comp_filter_mode'
+                )
+
+            show_all = st.checkbox(
+                'Karten anzeigen, die beide besitzen',
+                key='comp_show_all_checkbox'
+            )
+
+            if compare_user:
+                if filter_mode == 'Booster':
+                    booster_comp_left, booster_comp_right = st.columns(2)
+                    with booster_comp_left:
+                        comp_series_data = get_series_data()
+                        comp_series_list = [
+                            s['series_name'] for s in comp_series_data
+                        ]
+                        comp_default_series_index = \
+                            comp_series_list.index(CURRENT_SERIES) \
+                            if CURRENT_SERIES in series_list else 0
+
+                        comp_selected_series = st.selectbox(
+                            'Wähle eine Serie:',
+                            comp_series_list,
+                            index=comp_default_series_index,
+                            key='comp_series_select'
+                        )
+
+                    with booster_comp_right:
+                        comp_booster_data = get_booster_data(comp_selected_series)
+                        comp_booster_list = [
+                            b['booster_name'] for b in comp_booster_data
+                        ]
+                        comp_booster_dict = {
+                            b['booster_name']: b['id'] for b in comp_booster_data
+                        }
+                        comp_default_booster_index = \
+                            comp_booster_list.index(CURRENT_BOOSTER) \
+                            if CURRENT_BOOSTER in comp_booster_list else 0
+
+                        comp_selected_booster = st.selectbox(
+                            'Wähle ein Booster:',
+                            comp_booster_list,
+                            index=comp_default_booster_index,
+                            key='comp_booster_select',
+                            format_func=lambda name: (
+                                f'{name} ({comp_booster_dict.get(name, "")})'
+                                if name in comp_booster_dict else name
+                            )
+                        )
+
+                elif filter_mode == 'Seltenheit':
+                    all_cards = get_all_cards()
+                    available_rarities = sorted(list({
+                        get_base_rarity(c.get('rarity'))
+                        for c in all_cards if c.get('rarity')
+                    }))
+
+                    MANUAL_ORDER = [
+                        '♢', '♢♢', '♢♢♢', '♢♢♢♢',
+                        '☆', '☆☆', '☆☆☆',
+                        '✸', '✸✸', '♛'
+                    ]
+                    available_rarities.sort(
+                        key=(
+                            lambda x: MANUAL_ORDER.index(x)
+                            if x in MANUAL_ORDER else 999
+                        )
+                    )
+
+                    selected_rarity = st.selectbox(
+                        'Wähle eine Seltenheit:',
+                        available_rarities,
+                        index=0,
+                        key='comp_rarity_select'
+                    )
+
+        if compare_user:
+            compare_user_dict = next(
+                (u for u in users_data if u['username'] == compare_user),
+                None
+            )
+
+            if compare_user_dict:
+                compare_user_id = compare_user_dict['id']
+                comp_cards_data = []
+
+                if filter_mode == 'Booster':
+                    comp_cards_data = get_cards_data(comp_selected_booster)
+                elif filter_mode == 'Seltenheit':
+                    all_cards = get_all_cards()
+                    comp_cards_data = [
+                        c for c in all_cards
+                        if c.get('rarity')
+                        and get_base_rarity(c.get('rarity')) == selected_rarity
+                    ]
+
+                if comp_cards_data:
+                    my_collection = get_collection_data(user_id)
+                    their_collection = get_collection_data(compare_user_id)
+
+                    my_counts = {
+                        item['group_id']: item.get('quantity')
+                        for item in my_collection
+                    }
+                    their_counts = {
+                        item['group_id']: item.get('quantity')
+                        for item in their_collection
+                    }
+
+                    comparison_rows = []
+                    for card in comp_cards_data:
+                        group_id = card.get('group_id')
+                        i_have = group_id in my_counts
+                        they_have = group_id in their_counts
+
+                        if not show_all and i_have and they_have:
+                            continue
+
+                        if i_have and they_have:
+                            status = '🟢 Beide'
+                        elif i_have:
+                            status = f'🔵 Nur {user_name}'
+                        elif they_have:
+                            status = f'🟡 Nur {compare_user}'
+                        else:
+                            status = '🔴 Keiner'
+
+                        comparison_rows.append({
+                            'id': card.get('id'),
+                            'name': card.get('name'),
+                            'booster': card.get('booster'),
+                            'rarity': card.get('rarity'),
+                            'my_status': my_counts.get(group_id),
+                            'their_status': their_counts.get(group_id),
+                            'status': status
+                        })
+
+                    if not comparison_rows:
+                        st.info(
+                            'Keine Karten gefunden, die den Kriterien entsprechen.'
+                        )
+                    else:
+                        df_comp = pd.DataFrame(comparison_rows)
+                        df_comp = df_comp.set_index('id')
+
+                        row_height = 35
+                        header_height = 38
+                        total_height = (
+                            (len(df_comp) * row_height) + header_height
+                            if len(df_comp) < 900 else 'auto'
+                        )
+
+                        st.dataframe(
+                            df_comp,
+                            column_order=[
+                                'id', 'name', 'rarity', 'my_status',
+                                'their_status', 'status'
+                            ],
+                            column_config={
+                                'id': st.column_config.TextColumn('ID'),
+                                'name': st.column_config.TextColumn('Name'),
+                                'status': st.column_config.TextColumn('Vergleich'),
+                                'rarity': st.column_config.TextColumn(
+                                    'Seltenheit'
+                                ),
+                                'my_status': st.column_config.TextColumn(
+                                    f'{user_name}',
+                                    max_chars=2
+                                ),
+                                'their_status': st.column_config.TextColumn(
+                                    f'{compare_user}',
+                                    max_chars=2
+                                )
+                            },
+                            placeholder='-',
+                            height=total_height,
+                            row_height=row_height
+                        )
 
     # --- ADMIN ONLY CONTENT ---
     if user_role == 'admin':
@@ -680,7 +921,11 @@ if st.session_state.get('authentication_status'):
             st.header('Admin Dashboard', icon='🛠️')
 
             st.subheader('System-Wartung')
-            if st.button('Gesamten Cache leeren', icon='♻️'):
+            if st.button(
+                'Gesamten Cache leeren',
+                icon='♻️',
+                key='delete_cache_button'
+            ):
                 try:
                     st.cache_data.clear()
                     st.toast(
@@ -697,7 +942,8 @@ if st.session_state.get('authentication_status'):
             st.subheader('Neue Karten hochladen')
             uploaded_file = st.file_uploader(
                 '**CSV Datei auswählen**',
-                type=['csv', 'xlsx']
+                type=['csv', 'xlsx'],
+                key='new_cards_upload'
             )
 
             if uploaded_file is not None:
@@ -729,6 +975,8 @@ if st.session_state.get('authentication_status'):
                         )
 
                     else:
+                        file_df = file_df.set_index('id')
+
                         rarities = {
                             'C Pocket': '♢',
                             'U Pocket': '♢♢',
@@ -753,31 +1001,25 @@ if st.session_state.get('authentication_status'):
                             file_df['group_id'].apply(lambda x: isinstance(x, str))
                         ]['group_id'].unique().tolist()
 
+                        all_cards = get_all_cards()
+
                         id_mapping = {}
                         if string_ids:
-                            string_id_response = (
-                                supabase.table('cards')
-                                .select('id, group_id')
-                                .in_('id', string_ids)
-                                .execute()
+                            for card in all_cards:
+                                if card.get('id') in string_ids:
+                                    id_mapping[card['id']] = card.get('group_id')
+
+                        valid_group_ids = [
+                            c['group_id'] for c in all_cards
+                            if c.get('group_id') is not None
+                        ]
+
+                        if not valid_group_ids:
+                            raise RuntimeError(
+                                'Datenbank Rückgabe fehlerhaft oder leer.'
                             )
 
-                            for record in string_id_response.data:
-                                id_mapping[record['id']] = record['group_id']
-
-                        max_group_response = (
-                            supabase.table('cards')
-                            .select('group_id')
-                            .order('group_id', desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-
-                        if not max_group_response.data \
-                        or max_group_response.data[0]['group_id'] is None:
-                            raise RuntimeError('Datenbank Rückgabe fehlerhaft.')
-
-                        new_group_id = max_group_response.data[0]['group_id'] + 1
+                        new_group_id = max(valid_group_ids) + 1
                         new_group_ids = []
 
                         for val in file_df['group_id']:
@@ -812,8 +1054,6 @@ if st.session_state.get('authentication_status'):
                                     'Booster'
                                 )
                             },
-                            width='content',
-                            hide_index=True,
                             placeholder='-'
                         )
 
@@ -839,10 +1079,18 @@ if st.session_state.get('authentication_status'):
                                         gefunden, der noch nicht existiert.'
                                 )
 
-                            if st.button('Booster neu erstellen', icon='🗃️'):
-                                booster_creation_dialog(missing_booster, supabase)
+                            if st.button(
+                                'Booster neu erstellen',
+                                icon='🗃️',
+                                key='create_new_booster_button'
+                            ):
+                                booster_creation_dialog(missing_booster)
 
-                        elif st.button('Karten hinzufügen', icon='🗂️'):
+                        elif st.button(
+                            'Karten hinzufügen',
+                            icon='🗂️',
+                            key='add_new_cards_button'
+                        ):
                             file_df = file_df.astype(object) \
                                 .where(pd.notnull(file_df), None)
                             records = file_df.to_dict(orient='records')
@@ -854,6 +1102,7 @@ if st.session_state.get('authentication_status'):
                             )
 
                             if card_upload_response.data:
+                                get_all_cards.clear()
                                 get_cards_data.clear()
                                 get_booster_stats_data.clear()
                                 get_sub_booster_stats_data.clear()
