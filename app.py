@@ -113,12 +113,30 @@ def get_cards_data(booster_name):
 
 @st.cache_data(ttl=dt.timedelta(days=1), show_spinner=False)
 def get_collection_data(user_id):
-    return (
-        supabase.table('collection')
-        .select('group_id, quantity')
-        .eq('user_id', user_id)
-        .execute().data or []
-    )
+    all_collection_data = []
+    start = 0
+    step = 1000
+
+    while True:
+        data = (
+            supabase.table('collection')
+            .select('group_id, quantity')
+            .eq('user_id', user_id)
+            .range(start, start + step - 1)
+            .execute().data or []
+        )
+
+        if not data:
+            break
+
+        all_collection_data.extend(data)
+
+        if len(data) < step:
+            break
+
+        start += step
+
+    return all_collection_data
 
 @st.cache_data(ttl=dt.timedelta(days=1), show_spinner=False)
 def get_booster_stats_data(user_id):
