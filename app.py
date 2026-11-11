@@ -861,6 +861,7 @@ if st.session_state.get('authentication_status'):
                         'id': card.get('id'),
                         'name': card.get('name'),
                         'booster': card.get('booster_name'),
+                        'note': card.get('note'),
                         'rarity': card.get('rarity'),
                         'available_from': available_from_str
                     })
@@ -883,12 +884,14 @@ if st.session_state.get('authentication_status'):
                     st.dataframe(
                         df_comp,
                         column_order=[
-                            'id', 'name', 'booster', 'rarity', 'available_from'
+                            'id', 'name', 'booster', 'note',
+                            'rarity', 'available_from'
                         ],
                         column_config={
                             'id': st.column_config.TextColumn('ID'),
                             'name': st.column_config.TextColumn('Name'),
                             'booster': st.column_config.TextColumn('Booster'),
+                            'note': st.column_config.TextColumn('Notiz'),
                             'rarity': st.column_config.TextColumn(
                                 'Seltenheit'
                             ),
